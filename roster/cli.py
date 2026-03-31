@@ -20,8 +20,18 @@ from .models import ARCHETYPE_DEFAULTS, Agent, SplitPlan, Task
 from .prompts import write_prompts
 from .review import generate_review
 
-app = typer.Typer(help="Manage parallel AI agent development runs.")
+app = typer.Typer(
+    no_args_is_help=True,
+    add_completion=False,
+)
 console = Console()
+
+
+@app.command(hidden=True)
+def help(ctx: typer.Context) -> None:
+    """Show help."""
+    typer.echo(ctx.parent.get_help() if ctx.parent else ctx.get_help())
+    raise typer.Exit()
 
 
 @app.command()
