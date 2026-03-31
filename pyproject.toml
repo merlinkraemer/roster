@@ -15,7 +15,7 @@ dependencies = [
 ]
 
 [project.scripts]
-roster = "roster.cli:app"
+roster = "roster:main"
 
 [project.urls]
 Repository = "https://github.com/merlinkraemer/roster"

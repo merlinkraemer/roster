@@ -6,10 +6,10 @@ from .llm import call_llm
 from .models import SplitPlan
 
 _SYSTEM = """You are a technical lead reviewing the output of a parallel AI agent development run.
-Given the git log and task plan, write a concise structured review in markdown.
+Given the git log and work assignment plan, write a concise structured review in markdown.
 
 Include:
-- Per-agent summary: commits made, files changed, tasks addressed
+- Per-agent summary: commits made, files changed, work addressed
 - Overall assessment of the run
 - Open items or things to manually verify
 
@@ -29,9 +29,9 @@ def _parse_git_log(repo_path: Path) -> str:
 def detect_violations(plan: SplitPlan, git_log: str) -> list[str]:
     """Best-effort detection of files touched outside assigned ownership."""
     file_owners: dict[str, str] = {}
-    for task in plan.tasks:
-        for f in task.files:
-            file_owners[f] = task.agent
+    for assignment in plan.assignments:
+        for f in assignment.files:
+            file_owners[f] = assignment.agent
 
     violations: list[str] = []
     current_agent: str | None = None
@@ -61,12 +61,12 @@ def generate_review(plan: SplitPlan, repo_path: Path, outputs_dir: Path) -> str:
         for f in sorted(outputs_dir.glob("*.md")):
             outputs_text += f"\n### {f.stem}\n\n{f.read_text()}\n"
 
-    task_summary = "\n".join(
-        f"- {t.id} ({t.agent}): {t.description} — files: {', '.join(t.files)}"
-        for t in plan.tasks
+    assignment_summary = "\n".join(
+        f"- {a.agent}: {'; '.join(a.work)} — files: {', '.join(a.files)}"
+        for a in plan.assignments
     )
 
-    user_msg = f"## Task Plan\n\n{task_summary}\n\n## Git Log\n\n{git_log}"
+    user_msg = f"## Work Assignment\n\n{assignment_summary}\n\n## Git Log\n\n{git_log}"
     if outputs_text:
         user_msg += f"\n\n## Agent Outputs\n{outputs_text}"
 

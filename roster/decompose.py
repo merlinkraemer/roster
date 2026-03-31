@@ -1,67 +1,119 @@
 import json
 
-from .llm import call_llm
-from .models import Agent, Task
+from .llm import APIError, call_llm
+from .models import Agent, Assignment
 
-_SUGGEST_SYSTEM = """You are a technical project manager. Given a development plan and the user's available high-tier agents, propose the optimal team configuration.
+_ASSIGN_SYSTEM = """You are a technical project manager. Given a development plan and an agent roster, assign work to agents and produce a file ownership map.
 
-The user has specified how many high-tier agents they have available. Low-tier agents are unlimited. You must:
-- Decide the total number of agents needed based on the plan's complexity and scope
-- Assign high-tier agents to the most complex/critical parts of the plan
-- Fill remaining work with low-tier agents (docs, config, tests, simple tasks)
-- Choose short, simple names (one lowercase word: e.g. "backend", "frontend", "cli", "docs")
+If the plan contains structured work packages (WPs, sections, phases, numbered items), assign those as whole units. Do not break them into smaller pieces. Group related WPs onto the same agent when they are tightly coupled.
 
-Return a JSON array of agents. Each agent must have:
-- name: string (one lowercase word, e.g. "backend")
-- tier: "low" or "high" (exactly {high_count} agents must be "high", the rest "low")
-- role: one of "builder", "architect", "explorer", "reviewer"
-- domains: array of domain strings (e.g. ["backend", "api", "auth"])
+If the plan is unstructured, decompose it into logical work units first, then assign.
+
+For each agent, list:
+- work: array of work descriptions (WP names or logical units)
+- files: array of file paths this agent exclusively owns
 
 Rules:
-- Use exactly {high_count} high-tier agents, no more
-- High-tier agents handle ALL implementation work: backend, frontend, UI, components, API, database, state management, business logic, architecture
-- Low-tier agents handle ONLY: documentation, README, config files, project scaffolding, test boilerplate, CI/CD, .gitignore, examples
-- Low-tier agents must NEVER build features, write components, modify business logic, or touch production code
-- Agents should have non-overlapping domain responsibilities
-- Match role to the type of work
+- No two agents may own the same file
+- Budget agents may only own documentation, config, test scaffolding, or example files
+- Every file that will be touched must be assigned
+- Coupled work should go to the same agent
 
-Return ONLY the JSON array, no markdown fences, no explanation."""
+Return a JSON array. Each entry: {agent, work[], files[]}.
+No markdown fences, no explanation."""
 
-_DECOMPOSE_SYSTEM = """You are a technical project manager. Given a development plan and a team of AI coding agents, decompose the plan into atomic tasks and assign each task to the most suitable agent.
 
-Return a JSON array of tasks. Each task must have:
-- id: string (task-1, task-2, ...)
-- description: string
-- files: array of file paths or directory patterns this task owns exclusively
-- complexity: "low" | "medium" | "high"
-- agent: agent name from the roster
-- reason: brief explanation of the assignment
+class DecomposeError(Exception):
+    """Raised when decomposition fails with a user-friendly message."""
 
-Rules:
-- Tasks must not share file ownership (no two tasks may list the same file)
-- LOW-TIER AGENTS MAY ONLY BE ASSIGNED tasks that are: documentation, README, config files, project scaffolding, test boilerplate, CI/CD, examples, .gitignore, simple project organization
-- LOW-TIER AGENTS MUST NEVER be assigned: feature implementation, UI/components, backend/API code, database changes, business logic, state management, architecture decisions
-- HIGH-TIER AGENTS handle all implementation work (frontend, backend, UI, components, API, database, etc.)
-- Assign by domain fit first
-- Be specific about file paths; use directory patterns (e.g. "src/auth/") for broad ownership
-
-Return ONLY the JSON array, no markdown fences, no explanation."""
+    def __init__(self, message: str, hint: str = ""):
+        self.message = message
+        self.hint = hint
+        super().__init__(message)
 
 
 def suggest_roster(plan_text: str, high_count: int) -> list[Agent]:
-    """Ask the LLM to propose agents based on the plan content and high-tier budget.
+    """Ask the LLM to propose agents based on the plan content and high-tier budget."""
+    system = f"""You are a technical project manager. Given a development plan and a premium agent budget, propose the optimal team.
 
-    high_count: number of high-tier agents available (low-tier are unlimited).
-    """
+Rules:
+- Use UP TO {high_count} premium agents (may use fewer if the plan doesn't warrant it)
+- Budget agents are unlimited; add as many as useful
+- Premium agents handle ALL implementation work
+- Budget agents handle ONLY: documentation, config, test scaffolding, examples, CI/CD
+- Budget agents must NEVER build features or modify production code
+- Choose short one-word lowercase names (e.g. "core", "ui", "docs")
+- Agents should have non-overlapping domains
+- Tier values must be exactly "premium" or "budget"
+
+Return a JSON array. Each agent: {{name, tier, domains[]}}.
+No markdown fences, no explanation."""
+
     user_msg = (
-        f"## High-Tier Agents Available: {high_count}\n\n"
+        f"## Premium Agent Budget: up to {high_count}\n\n"
         f"## Development Plan\n\n{plan_text}"
     )
-    system = _SUGGEST_SYSTEM.format(high_count=high_count)
     raw = call_llm(system, user_msg).strip()
+    return _parse_agents(raw)
+
+
+def assign_work(plan_text: str, roster: list[Agent]) -> list[Assignment]:
+    """Ask the LLM to assign work packages to agents and produce file ownership."""
+    roster_json = json.dumps(
+        [{"name": a.name, "tier": a.tier, "domains": a.domains} for a in roster],
+        indent=2,
+    )
+    user_msg = f"## Agent Roster\n\n{roster_json}\n\n## Development Plan\n\n{plan_text}"
+    raw = call_llm(_ASSIGN_SYSTEM, user_msg).strip()
+    return _parse_assignments(raw)
+
+
+def _parse_agents(raw: str) -> list[Agent]:
+    """Parse JSON array of agents from LLM output."""
     raw = _strip_fences(raw)
-    agents_data = json.loads(raw)
-    return [Agent(**a) for a in agents_data]
+    try:
+        agents_data = json.loads(raw)
+    except json.JSONDecodeError:
+        raise DecomposeError(
+            "Failed to parse agent suggestions from the API",
+            hint="The model returned invalid JSON. Try again.",
+        )
+    if not isinstance(agents_data, list):
+        raise DecomposeError(
+            "Expected a list of agents from the API",
+            hint="The model returned an unexpected format. Try again.",
+        )
+    try:
+        return [Agent(**a) for a in agents_data]
+    except TypeError as e:
+        raise DecomposeError(
+            f"Invalid agent format: {e}",
+            hint="The model returned agents with missing or wrong fields. Try again.",
+        )
+
+
+def _parse_assignments(raw: str) -> list[Assignment]:
+    """Parse JSON array of assignments from LLM output."""
+    raw = _strip_fences(raw)
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        raise DecomposeError(
+            "Failed to parse work assignment from the API",
+            hint="The model returned invalid JSON. Try again.",
+        )
+    if not isinstance(data, list):
+        raise DecomposeError(
+            "Expected a list of assignments from the API",
+            hint="The model returned an unexpected format. Try again.",
+        )
+    try:
+        return [Assignment(**a) for a in data]
+    except TypeError as e:
+        raise DecomposeError(
+            f"Invalid assignment format: {e}",
+            hint="The model returned assignments with missing or wrong fields. Try again.",
+        )
 
 
 def _strip_fences(raw: str) -> str:
@@ -70,26 +122,3 @@ def _strip_fences(raw: str) -> str:
         raw = raw.split("\n", 1)[1]
         raw = raw.rsplit("```", 1)[0].strip()
     return raw
-
-
-def decompose_plan(plan_text: str, roster: list[Agent]) -> list[Task]:
-    roster_json = json.dumps(
-        [
-            {
-                "name": a.name,
-                "tier": a.tier,
-                "role": a.role,
-                "domains": a.domains,
-            }
-            for a in roster
-        ],
-        indent=2,
-    )
-
-    user_msg = f"## Agent Roster\n\n{roster_json}\n\n## Development Plan\n\n{plan_text}"
-    raw = call_llm(_DECOMPOSE_SYSTEM, user_msg).strip()
-
-    raw = _strip_fences(raw)
-
-    tasks_data = json.loads(raw)
-    return [Task(**t) for t in tasks_data]

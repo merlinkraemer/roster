@@ -19,30 +19,84 @@ def _api_key() -> str:
     return key
 
 
+class APIError(Exception):
+    """Raised when an API call fails with a user-friendly message."""
+
+    def __init__(self, message: str, hint: str = ""):
+        self.message = message
+        self.hint = hint
+        super().__init__(message)
+
+
 def call_llm(system: str, user: str, timeout: int = 300) -> str:
     model = os.environ.get("ROSTER_MODEL", _DEFAULT_MODEL)
     base_url = os.environ.get("ROSTER_BASE_URL", _DEFAULT_BASE_URL).rstrip("/")
     url = f"{base_url}/chat/completions"
 
-    response = requests.post(
-        url,
-        headers={
-            "Authorization": f"Bearer {_api_key()}",
-            "Content-Type": "application/json",
-            "Accept-Language": "en-US,en",
-        },
-        json={
-            "model": model,
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-            "thinking": {"type": "enabled", "clear_thinking": False},
-        },
-        timeout=timeout,
-    )
-    response.raise_for_status()
-    return response.json()["choices"][0]["message"]["content"]
+    try:
+        response = requests.post(
+            url,
+            headers={
+                "Authorization": f"Bearer {_api_key()}",
+                "Content-Type": "application/json",
+                "Accept-Language": "en-US,en",
+            },
+            json={
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+                "thinking": {"type": "enabled", "clear_thinking": False},
+            },
+            timeout=timeout,
+        )
+        response.raise_for_status()
+    except requests.Timeout:
+        raise APIError(
+            "API request timed out",
+            hint="The plan may be too large. Try splitting it into smaller files, or set ROSTER_TIMEOUT env var.",
+        )
+    except requests.ConnectionError:
+        raise APIError(
+            "Could not connect to API",
+            hint="Check your internet connection or try again later.",
+        )
+    except requests.HTTPError as e:
+        if e.response is not None:
+            if e.response.status_code == 401:
+                raise APIError(
+                    "API key is invalid or expired",
+                    hint="Run 'roster auth' to update your key.",
+                )
+            if e.response.status_code == 429:
+                raise APIError(
+                    "Rate limited by the API",
+                    hint="Wait a moment and try again.",
+                )
+            if e.response.status_code >= 500:
+                raise APIError(
+                    f"API server error ({e.response.status_code})",
+                    hint="The API may be temporarily down. Try again later.",
+                )
+            detail = ""
+            try:
+                detail = e.response.json().get("error", {}).get("message", "")
+            except Exception:
+                pass
+            raise APIError(
+                f"API request failed ({e.response.status_code})",
+                hint=detail or "Check your API key and try again.",
+            )
+        raise APIError("API request failed", hint=str(e))
+
+    try:
+        return response.json()["choices"][0]["message"]["content"]
+    except (KeyError, IndexError):
+        raise APIError(
+            "Unexpected API response format",
+            hint="The API may have changed. Try again.",
+        )
 
 
 def test_api_key(key: str | None = None) -> dict:

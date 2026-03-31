@@ -31,7 +31,12 @@ def load_roster(repo_path: Path | None = None) -> list[Agent]:
     if not path.exists():
         return []
     data = json.loads(path.read_text())
-    return [Agent(**a) for a in data["agents"]]
+    agents = []
+    for a in data["agents"]:
+        # Drop legacy 'role' field if present
+        a_clean = {k: v for k, v in a.items() if k != "role"}
+        agents.append(Agent(**a_clean))
+    return agents
 
 
 def save_roster(agents: list[Agent], repo_path: Path | None = None) -> None:
@@ -40,12 +45,7 @@ def save_roster(agents: list[Agent], repo_path: Path | None = None) -> None:
     path = d / "roster.json"
     data = {
         "agents": [
-            {
-                "name": a.name,
-                "tier": a.tier,
-                "role": a.role,
-                "domains": a.domains,
-            }
+            {"name": a.name, "tier": a.tier, "domains": a.domains}
             for a in agents
         ]
     }
