@@ -74,11 +74,12 @@ def prepare_run(repo: Path, plan_path: Path) -> dict:
     _save_split_plan(plan, roster_dir)
 
     # 6. Write prompts (COORDINATION.md + per-agent prompts)
-    write_prompts(plan, roster, plan_text, repo)
+    agent_prompts = write_prompts(plan, roster, plan_text, repo)
 
     return {
         "roster": roster,
         "plan": plan,
+        "prompts": agent_prompts,
         "prompts_dir": roster_dir / "prompts",
         "coordination_path": roster_dir / "COORDINATION.md",
     }

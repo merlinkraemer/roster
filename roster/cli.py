@@ -4,6 +4,7 @@ from pathlib import Path
 import typer
 from rich.console import Console
 from rich.prompt import IntPrompt, Prompt
+from rich.panel import Panel
 from rich.table import Table
 
 from .assign import validate_assignments
@@ -158,13 +159,33 @@ def _do_run(plan_path: Path, repo: Path) -> None:
 
     plan = result["plan"]
     _print_task_table(plan.tasks)
-    console.print(f"\n[green]✓ Prompts written to {result['prompts_dir']}/[/green]")
+    console.print()
+
+    # --- Print prompts inline ---
+    for agent_name, prompt in result["prompts"].items():
+        console.print(
+            Panel(
+                prompt,
+                title=f"[bold cyan]{agent_name}[/]",
+                border_style="cyan",
+                padding=(1, 2),
+            )
+        )
+        console.print()
+
+    console.print(f"[green]✓ Prompts also saved to {result['prompts_dir']}/[/green]")
     console.print(f"[green]✓ COORDINATION.md at {result['coordination_path']}[/green]")
 
     # --- Step 3: Monitor ---
-    console.print("\n[dim]Starting monitor. Agents are working in parallel.[/dim]")
+    start = Prompt.ask("Start monitoring?", choices=["y", "n"], default="y")
+    if start != "y":
+        console.print(
+            "[dim]Done. Run 'roster run' or 'roster review' when ready.[/dim]"
+        )
+        return
+
     console.print(
-        "[dim]Paste each prompt into its AI tool, then track progress here.[/dim]\n"
+        "\n[dim]Agents are working in parallel. Track progress below.[/dim]\n"
     )
     Monitor(repo, plan).start()
 
@@ -179,15 +200,18 @@ def _suggest_and_confirm_roster(plan_path: Path, repo: Path) -> list[Agent]:
         plan_text = plan_path.read_text()
 
     # Ask user for agent count and tiers
+    console.print(
+        "[dim]Tiers: 1=low (docs, config), 2=medium (standard), 3=high (complex)[/dim]"
+    )
     n = IntPrompt.ask("How many agents?", default=2)
+    _TIER_MAP = {"1": "low", "2": "medium", "3": "high"}
     agent_specs = []
     for i in range(1, n + 1):
-        tier = Prompt.ask(
-            f"  Agent {i} tier",
-            default="medium",
-            choices=["low", "medium", "high"],
-            show_choices=True,
+        tier_num = Prompt.ask(
+            f"  Agent {i} tier [1/2/3]",
+            default="2",
         )
+        tier = _TIER_MAP.get(tier_num, "medium")
         agent_specs.append({"tier": tier})
 
     # Ask LLM to name them and pick roles/domains
@@ -254,10 +278,14 @@ def init(
 ) -> None:
     """Set up the agent roster interactively."""
     console.print("[bold]Roster Init[/bold] — configure your agent roster\n")
+    console.print(
+        "[dim]Tiers: 1=low (docs, config), 2=medium (standard), 3=high (complex)[/dim]\n"
+    )
 
     n = IntPrompt.ask("How many agents?", default=2)
     agents: list[Agent] = []
     role_choices = "builder/architect/explorer/reviewer"
+    _TIER_MAP = {"1": "low", "2": "medium", "3": "high"}
 
     for i in range(1, n + 1):
         console.print(f"\n[bold cyan]Agent {i}[/bold cyan]")
@@ -275,12 +303,8 @@ def init(
                 f"  [dim]→ domains pre-filled: {', '.join(default_domains)}[/dim]"
             )
 
-        tier = Prompt.ask(
-            "  Tier",
-            default="medium",
-            choices=["low", "medium", "high"],
-            show_choices=True,
-        )
+        tier_num = Prompt.ask("  Tier [1/2/3]", default="2")
+        tier = _TIER_MAP.get(tier_num, "medium")
 
         override = Prompt.ask(
             "  Override domains? (comma-separated, leave blank to keep pre-filled)",

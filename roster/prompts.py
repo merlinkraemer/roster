@@ -114,7 +114,8 @@ def write_prompts(
     roster: list[Agent],
     plan_text: str,
     repo_path: Path,
-) -> None:
+) -> dict[str, str]:
+    """Generate and save prompts. Returns {agent_name: prompt_text}."""
     ros_dir = repo_path / ".roster"
     prompts_dir = ros_dir / "prompts"
     prompts_dir.mkdir(parents=True, exist_ok=True)
@@ -126,6 +127,7 @@ def write_prompts(
     for task in plan.tasks:
         tasks_by_agent.setdefault(task.agent, []).append(task)
 
+    result: dict[str, str] = {}
     for agent_name, agent_tasks in tasks_by_agent.items():
         agent = agent_map[agent_name]
         prompt = generate_agent_prompt(
@@ -135,3 +137,6 @@ def write_prompts(
             coordination_path=".roster/COORDINATION.md",
         )
         (prompts_dir / f"{agent_name}.md").write_text(prompt)
+        result[agent_name] = prompt
+
+    return result
