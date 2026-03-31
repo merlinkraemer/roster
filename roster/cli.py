@@ -206,16 +206,8 @@ def _suggest_and_confirm_roster(plan_path: Path, repo: Path) -> list[Agent]:
         plan_text = plan_path.read_text()
 
     # Ask only for high-tier budget
-    high_count = questionary.select(
-        "How many high-tier agents?",
-        choices=[
-            questionary.Choice("1", value=1),
-            questionary.Choice("2", value=2),
-            questionary.Choice("3", value=3),
-            questionary.Choice("4", value=4),
-        ],
-        default=2,
-    ).ask()
+    high_raw = questionary.text("How many high-tier agents?", default="2").ask()
+    high_count = int(high_raw) if high_raw else 2
 
     console.print(f"\n[dim]Low-tier agents: unlimited (LLM will decide how many)[/dim]")
     console.print("[bold]Analyzing plan to build team...[/bold]")
