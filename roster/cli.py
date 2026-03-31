@@ -1,9 +1,9 @@
 import json
 from pathlib import Path
 
+import questionary
 import typer
 from rich.console import Console
-from rich.prompt import IntPrompt, Prompt
 from rich.panel import Panel
 from rich.table import Table
 
@@ -50,8 +50,8 @@ def auth(
         masked = existing[:6] + "…" + existing[-4:]
         console.print(f"[dim]Current key: {masked}[/dim]")
 
-    key = Prompt.ask("Z.AI API key")
-    if not key.strip():
+    key = questionary.text("Z.AI API key").ask()
+    if not key or not key.strip():
         console.print("[red]Aborted — no key entered.[/red]")
         raise typer.Exit(1)
 
@@ -125,7 +125,7 @@ def run(
 ) -> None:
     """Set up agents, split plan, generate prompts, and start monitoring."""
     if not plan_path:
-        plan_path = Path(Prompt.ask("Path to plan file or directory"))
+        plan_path = Path(questionary.text("Path to plan file or directory").ask())
 
     _do_run(plan_path, repo)
 
@@ -135,11 +135,13 @@ def _do_run(plan_path: Path, repo: Path) -> None:
     # --- Step 1: Roster ---
     roster = load_roster(repo)
     if roster:
-        names = ", ".join(f"[cyan]{a.name}[/]" for a in roster)
-        reuse = Prompt.ask(
-            f"Found roster ({names}). Reuse?", choices=["y", "n"], default="y"
-        )
-        if reuse == "n":
+        names = ", ".join(f"{a.name}" for a in roster)
+        reuse = questionary.select(
+            f"Found roster ({names}). Reuse?",
+            choices=["Yes", "No"],
+            default="Yes",
+        ).ask()
+        if reuse == "No":
             roster = _suggest_and_confirm_roster(plan_path, repo)
     else:
         roster = _suggest_and_confirm_roster(plan_path, repo)
@@ -177,8 +179,12 @@ def _do_run(plan_path: Path, repo: Path) -> None:
     console.print(f"[green]✓ COORDINATION.md at {result['coordination_path']}[/green]")
 
     # --- Step 3: Monitor ---
-    start = Prompt.ask("Start monitoring?", choices=["y", "n"], default="y")
-    if start != "y":
+    start = questionary.select(
+        "Start monitoring?",
+        choices=["Yes", "Skip"],
+        default="Yes",
+    ).ask()
+    if start == "Skip":
         console.print(
             "[dim]Done. Run 'roster run' or 'roster review' when ready.[/dim]"
         )
@@ -201,17 +207,25 @@ def _suggest_and_confirm_roster(plan_path: Path, repo: Path) -> list[Agent]:
 
     # Ask user for agent count and tiers
     console.print(
-        "[dim]Tiers: 1=low (docs, config), 2=medium (standard), 3=high (complex)[/dim]"
+        "[dim]Tiers: low (docs, config), medium (standard), high (complex)[/dim]"
     )
-    n = IntPrompt.ask("How many agents?", default=2)
-    _TIER_MAP = {"1": "low", "2": "medium", "3": "high"}
+    n = questionary.text("How many agents?", default="2").ask()
+    if not n:
+        n = "2"
+    n = int(n)
+
+    _TIER_OPTIONS = [
+        questionary.Choice("low  — docs, config, simple refactors", value="low"),
+        questionary.Choice("medium  — standard implementation", value="medium"),
+        questionary.Choice("high  — complex architecture, hard problems", value="high"),
+    ]
     agent_specs = []
     for i in range(1, n + 1):
-        tier_num = Prompt.ask(
-            f"  Agent {i} tier [1/2/3]",
-            default="2",
-        )
-        tier = _TIER_MAP.get(tier_num, "medium")
+        tier = questionary.select(
+            f"Agent {i} tier",
+            choices=_TIER_OPTIONS,
+            default="medium",
+        ).ask()
         agent_specs.append({"tier": tier})
 
     # Ask LLM to name them and pick roles/domains
@@ -239,13 +253,17 @@ def _suggest_and_confirm_roster(plan_path: Path, repo: Path) -> list[Agent]:
         )
     console.print(table)
 
-    confirm = Prompt.ask("Accept this roster?", choices=["y", "n", "e"], default="y")
-    if confirm == "n":
+    confirm = questionary.select(
+        "Accept this roster?",
+        choices=["Accept", "Edit manually", "Cancel"],
+        default="Accept",
+    ).ask()
+    if confirm == "Cancel":
         console.print(
             "[dim]Run 'roster init' to set up manually, then 'roster run' again.[/dim]"
         )
         return []
-    if confirm == "e":
+    if confirm == "Edit manually":
         init(repo=repo)
         return load_roster(repo)
 
@@ -278,23 +296,34 @@ def init(
 ) -> None:
     """Set up the agent roster interactively."""
     console.print("[bold]Roster Init[/bold] — configure your agent roster\n")
-    console.print(
-        "[dim]Tiers: 1=low (docs, config), 2=medium (standard), 3=high (complex)[/dim]\n"
-    )
 
-    n = IntPrompt.ask("How many agents?", default=2)
+    n_raw = questionary.text("How many agents?", default="2").ask()
+    n = int(n_raw) if n_raw else 2
     agents: list[Agent] = []
-    role_choices = "builder/architect/explorer/reviewer"
-    _TIER_MAP = {"1": "low", "2": "medium", "3": "high"}
+
+    _TIER_OPTIONS = [
+        questionary.Choice("low  — docs, config, simple refactors", value="low"),
+        questionary.Choice("medium  — standard implementation", value="medium"),
+        questionary.Choice("high  — complex architecture, hard problems", value="high"),
+    ]
+
+    _ROLE_OPTIONS = [
+        questionary.Choice("builder  — code quality, implementation", value="builder"),
+        questionary.Choice("architect  — system design, structure", value="architect"),
+        questionary.Choice("explorer  — new features, prototyping", value="explorer"),
+        questionary.Choice("reviewer  — docs, simple fixes", value="reviewer"),
+        questionary.Choice("skip", value=None),
+    ]
 
     for i in range(1, n + 1):
         console.print(f"\n[bold cyan]Agent {i}[/bold cyan]")
-        name = Prompt.ask("  Name")
+        name = questionary.text("  Name").ask() or ""
 
-        role_raw = Prompt.ask(
-            f"  Role (optional — {role_choices}, or skip)", default=""
-        ).strip()
-        role = role_raw or None
+        role = questionary.select(
+            "  Role",
+            choices=_ROLE_OPTIONS,
+            default="builder",
+        ).ask()
 
         default_domains: list[str] = []
         if role and role in ROLE_DEFAULTS:
@@ -303,20 +332,26 @@ def init(
                 f"  [dim]→ domains pre-filled: {', '.join(default_domains)}[/dim]"
             )
 
-        tier_num = Prompt.ask("  Tier [1/2/3]", default="2")
-        tier = _TIER_MAP.get(tier_num, "medium")
+        tier = questionary.select(
+            "  Tier",
+            choices=_TIER_OPTIONS,
+            default="medium",
+        ).ask()
 
-        override = Prompt.ask(
-            "  Override domains? (comma-separated, leave blank to keep pre-filled)",
-            default="",
-        ).strip()
+        override = (
+            questionary.text(
+                "  Override domains? (comma-separated, leave blank to keep pre-filled)",
+                default="",
+            ).ask()
+            or ""
+        )
         if override:
             domains = [d.strip() for d in override.split(",")]
         elif default_domains:
             domains = default_domains
         else:
-            raw = Prompt.ask("  Domains (comma-separated)")
-            domains = [d.strip() for d in raw.split(",")]
+            raw = questionary.text("  Domains (comma-separated)").ask() or ""
+            domains = [d.strip() for d in raw.split(",") if d.strip()]
 
         agents.append(
             Agent(
