@@ -5,7 +5,12 @@ from .models import Agent, Assignment
 
 _ASSIGN_SYSTEM = """You are a technical project manager. Given a development plan and an agent roster, assign work to agents and produce a file ownership map.
 
-If the plan contains structured work packages (WPs, sections, phases, numbered items), assign those as whole units. Do not break them into smaller pieces. Group related WPs onto the same agent when they are tightly coupled.
+CRITICAL: Each agent must be fully self-contained. Agents run in parallel and cannot communicate or depend on each other's output.
+- If work item B requires the output of work item A, assign BOTH to the same agent.
+- Never split sequential work across agents.
+- Never design an assignment that requires one agent to "hand off" to another.
+
+If the plan contains structured work packages (WPs, sections, phases, numbered items), assign those as whole units. Do not break them into smaller pieces. Group related or sequential WPs onto the same agent.
 
 If the plan is unstructured, decompose it into logical work units first, then assign.
 
@@ -17,7 +22,7 @@ Rules:
 - No two agents may own the same file
 - Budget agents may only own documentation, config, test scaffolding, or example files
 - Every file that will be touched must be assigned
-- Coupled work should go to the same agent
+- Coupled or sequential work MUST go to the same agent
 
 Return a JSON array. Each entry: {agent, work[], files[]}.
 No markdown fences, no explanation."""

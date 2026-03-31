@@ -37,12 +37,11 @@ def generate_coordination_md(plan: SplitPlan, roster: list[Agent]) -> str:
     lines.append("")
 
     lines += [
-        "## Dependencies",
+        "## Independence",
         "",
-        "If you need something from another agent's domain:",
-        "- Leave a TODO comment in your code describing what you need",
-        "- Do not block on it — use a stub, mock, or placeholder",
-        "- Do not modify their files",
+        "Each agent's work is fully self-contained. Agents run in parallel and cannot depend on each other.",
+        "If you find that you need something from another agent's files, that is a planning error —",
+        "stop and flag it rather than working around it.",
         "",
         "## Commit convention",
         "",
@@ -74,7 +73,9 @@ def _generate_high_tier_prompt(
         "",
         "## Files you own",
         "",
-        "You may ONLY modify these files:",
+        "You own these files. **Create them if they don't exist yet** — file creation is explicitly permitted.",
+        "If code you need to extract currently lives in a file not on this list, you may modify that source file",
+        "only to move code into your owned files (add imports, remove extracted code). Nothing else.",
     ]
     for f in assignment.files:
         lines.append(f"- `{f}`")
@@ -96,11 +97,12 @@ def _generate_high_tier_prompt(
         lines.append(f"- **{other.agent}** owns {files_str}")
     lines += [
         "",
-        "Do not touch their files. If you need something from their domain, leave a TODO comment and move on.",
+        "Do not touch their files. Your work is fully self-contained — if you find you need something",
+        "from another agent's files, stop and flag it as a planning error rather than working around it.",
         "",
         "## Rules",
         "",
-        "1. Only modify your files.",
+        "1. Create or modify only your owned files (plus minimal extraction edits to source files).",
         f"2. Prefix commits with `[{agent.name}]`.",
         "3. Commit after each logical change.",
         "4. Read COORDINATION.md first.",
@@ -128,13 +130,13 @@ def _generate_low_tier_prompt(
         "",
         "## Output files",
         "",
-        "Write to:",
+        "Write to these files. **Create them if they don't exist yet** — file creation is explicitly permitted.",
     ]
     for f in assignment.files:
         lines.append(f"- `{f}`")
     lines += [
         "",
-        "Do NOT touch any other files.",
+        "Do not modify any other files.",
         "",
         "## References",
         "",
@@ -150,9 +152,12 @@ def _generate_low_tier_prompt(
         lines.append(f"- **{other.agent}** owns {files_str}")
     lines += [
         "",
+        "Do not touch their files. Your work is fully self-contained — if you find you need something",
+        "from another agent's files, stop and flag it as a planning error rather than working around it.",
+        "",
         "## Rules",
         "",
-        "1. Only modify your files.",
+        "1. Create or modify only your output files.",
         f"2. Prefix commits with `[{agent.name}]`.",
         "3. Commit after each logical change.",
         "4. Read COORDINATION.md first.",

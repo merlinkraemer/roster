@@ -5,12 +5,13 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+import threading
 import time
+from datetime import datetime
 from pathlib import Path
 
 from rich.console import Console
 from rich.panel import Panel
-from rich.prompt import Prompt
 from rich.table import Table
 
 from .config import get_roster_dir
@@ -79,9 +80,11 @@ class Monitor:
     """
     Passive monitor for parallel agent runs.
 
-    Watches the repo for git commits, displays per-agent status,
-    and auto-detects active/idle/done state from git activity.
+    Auto-polls git every 30s, displays per-agent status,
+    and accepts commands: update <agent> <note> | done | q
     """
+
+    REFRESH_INTERVAL = 30  # seconds between auto-polls
 
     def __init__(self, repo: Path, plan: SplitPlan):
         self.repo = repo
@@ -99,6 +102,7 @@ class Monitor:
         self.agent_commits: dict[str, list[dict]] = {a: [] for a in agents}
         self.agent_files: dict[str, set[str]] = {a: set() for a in agents}
         self.agent_last_commit: dict[str, float | None] = {a: None for a in agents}
+        self.agent_notes: dict[str, str] = {a: "" for a in agents}
 
         # Track which commit hashes we've already processed
         self.seen_commits: set[str] = set()
@@ -107,33 +111,127 @@ class Monitor:
         self.baseline_commit = self._get_head_commit()
 
         self._running = True
+        self._lock = threading.Lock()
 
     def start(self) -> None:
-        """Main loop: poll git, display status, accept q to quit."""
+        """Main loop: auto-poll in background, accept commands from stdin."""
         self.console.print(
-            "\n[dim]watching for commits... press Enter to refresh, q to quit.[/dim]\n"
+            "\n[dim]auto-refreshing every 30s. commands: update <agent> <note> | done | q[/dim]\n"
         )
         self._render_status()
 
-        while self._running:
-            new_commits = self._poll_git()
-            changed_files = self._poll_files()
+        poll_thread = threading.Thread(target=self._auto_poll, daemon=True)
+        poll_thread.start()
 
+        while self._running:
+            try:
+                line = input("> ").strip()
+            except (KeyboardInterrupt, EOFError):
+                self._running = False
+                break
+
+            if not line:
+                with self._lock:
+                    self._render_status()
+            else:
+                cmd = line.lower()
+                if cmd in ("q", "quit", "exit"):
+                    self._running = False
+                    self.console.print("[dim]done watching.[/dim]")
+                elif cmd == "done":
+                    path = self._write_cycle_summary()
+                    self.console.print(f"\n[green]cycle summary → {path}[/green]")
+                    self._running = False
+                elif line.lower().startswith("update "):
+                    self._handle_update_cmd(line[7:])
+                else:
+                    self.console.print(
+                        "[dim]commands: update <agent> <note> | done | q[/dim]"
+                    )
+
+    def _auto_poll(self) -> None:
+        """Background thread: poll git every REFRESH_INTERVAL seconds."""
+        while self._running:
+            time.sleep(self.REFRESH_INTERVAL)
+            if not self._running:
+                break
+            with self._lock:
+                new_commits = self._poll_git()
+                changed_files = self._poll_files()
             if new_commits:
                 self._display_new_commits(new_commits)
             if new_commits or changed_files:
                 self._render_status()
 
-            try:
-                line = Prompt.ask("\n[dim]>[/dim]", console=self.console, default="")
-                cmd = line.strip().lower()
-                if cmd in ("q", "quit", "exit"):
-                    self._running = False
-                    self.console.print("[dim]done watching.[/dim]")
-                elif cmd:
-                    self.console.print("[dim]press Enter to refresh, q to quit.[/dim]")
-            except (KeyboardInterrupt, EOFError):
-                self._running = False
+    def _handle_update_cmd(self, rest: str) -> None:
+        """Parse and store: update <agent> <note>"""
+        parts = rest.split(" ", 1)
+        if len(parts) < 2:
+            self.console.print("[dim]usage: update <agent> <note>[/dim]")
+            return
+        agent_name, note = parts[0], parts[1]
+        # case-insensitive match
+        if agent_name not in self.agent_notes:
+            matches = [a for a in self.agent_notes if a.lower() == agent_name.lower()]
+            if matches:
+                agent_name = matches[0]
+            else:
+                self.console.print(f"[red]unknown agent: {agent_name}[/red]")
+                return
+        self.agent_notes[agent_name] = note
+        self.console.print(f"[dim]note saved for {agent_name}[/dim]")
+        self._render_status()
+
+    def _write_cycle_summary(self) -> Path:
+        """Write a cycle summary markdown file to .roster/cycle-N.md."""
+        roster_dir = get_roster_dir(self.repo)
+        existing = list(roster_dir.glob("cycle-*.md"))
+        cycle_num = len(existing) + 1
+
+        now = datetime.now()
+        lines = [
+            f"# Cycle {cycle_num} Summary",
+            "",
+            f"Date: {now.strftime('%Y-%m-%d %H:%M')}",
+            "",
+            "## Agents",
+            "",
+        ]
+
+        for assignment in self.plan.assignments:
+            agent = assignment.agent
+            commits = self.agent_commits.get(agent, [])
+            files = self.agent_files.get(agent, set())
+            status = self._get_agent_status(agent)
+            note = self.agent_notes.get(agent, "")
+
+            lines += [
+                f"### {agent}",
+                "",
+                f"**Work:** {'; '.join(assignment.work)}",
+                f"**Files:** {', '.join(assignment.files)}",
+                f"**Status:** {status}",
+                f"**Commits:** {len(commits)}",
+                f"**Files changed:** {len(files)}",
+            ]
+            if note:
+                lines.append(f"**Summary:** {note}")
+            lines.append("")
+
+        all_commits = []
+        for agent_commits in self.agent_commits.values():
+            all_commits.extend(agent_commits)
+        all_commits.sort(key=lambda c: c["timestamp"])
+
+        if all_commits:
+            lines += ["## Commit log", ""]
+            for c in all_commits:
+                lines.append(f"- `{c['hash']}` [{c['agent']}] {c['message']}")
+            lines.append("")
+
+        path = roster_dir / f"cycle-{cycle_num}.md"
+        path.write_text("\n".join(lines))
+        return path
 
     def _get_head_commit(self) -> str:
         result = subprocess.run(
@@ -280,3 +378,9 @@ class Monitor:
         self.console.print(
             Panel(table, title="[bold]Agent Status[/]", border_style="blue")
         )
+
+        # Show any agent notes below the table
+        notes = {a: n for a, n in self.agent_notes.items() if n}
+        if notes:
+            for agent, note in notes.items():
+                self.console.print(f"  [cyan]{agent}[/cyan] [dim]→[/dim] {note}")
