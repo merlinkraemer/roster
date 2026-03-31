@@ -3,27 +3,24 @@ import json
 from .llm import call_llm
 from .models import Agent, Task
 
-_SUGGEST_SYSTEM = """You are a technical project manager. Given a development plan, propose an optimal team of AI coding agents to execute it in parallel.
+_SUGGEST_SYSTEM = """You are a technical project manager. Given a development plan and agent specs, propose the optimal team configuration.
 
-Analyze the plan and determine:
-- How many agents are needed (usually 2-4 for most plans)
-- What each agent should specialize in based on the plan's domains/areas
-- Names must be short, simple, lowercase labels: e.g. "backend", "frontend", "cli", "api", "web", "docs", "auth", "infra", "mobile", "config". One word, no hyphens or numbers.
+The user has specified how many agents they have and each agent's tier. You must:
+- Choose a short, simple name for each agent (one lowercase word: e.g. "backend", "frontend", "cli", "docs", "api")
+- Assign a role (builder/architect/explorer/reviewer) based on the plan's needs
+- Pick domains that don't overlap with other agents
 
 Return a JSON array of agents. Each agent must have:
 - name: string (one lowercase word, e.g. "backend")
-- tier: "low" | "medium" | "high"
-  - low: suited for simple tasks — docs, config, git chores, simple refactors
-  - medium: suited for standard implementation tasks
-  - high: suited for complex architecture, hard problems, cross-cutting concerns
+- tier: string (use the tier provided in the agent spec)
 - role: one of "builder", "architect", "explorer", "reviewer"
 - domains: array of domain strings (e.g. ["backend", "api", "auth"])
 
 Rules:
+- Use exactly the number of agents specified
+- Use exactly the tiers specified (in order)
 - Agents should have non-overlapping domain responsibilities
 - Match role to the type of work (builder for implementation, architect for design, etc.)
-- Keep agent count minimal — merge related work into fewer agents
-- A low-tier agent should get simpler work, a high-tier agent should get harder work
 
 Return ONLY the JSON array, no markdown fences, no explanation."""
 
@@ -46,9 +43,14 @@ Rules:
 Return ONLY the JSON array, no markdown fences, no explanation."""
 
 
-def suggest_roster(plan_text: str) -> list[Agent]:
-    """Ask the LLM to propose agents based on the plan content."""
-    raw = call_llm(_SUGGEST_SYSTEM, f"## Development Plan\n\n{plan_text}").strip()
+def suggest_roster(plan_text: str, agent_specs: list[dict]) -> list[Agent]:
+    """Ask the LLM to propose agents based on the plan content and user-provided specs.
+
+    agent_specs: list of {"tier": "low"|"medium"|"high"} dicts, one per agent.
+    """
+    specs_json = json.dumps(agent_specs, indent=2)
+    user_msg = f"## Agent Specs\n\n{specs_json}\n\n## Development Plan\n\n{plan_text}"
+    raw = call_llm(_SUGGEST_SYSTEM, user_msg).strip()
     raw = _strip_fences(raw)
     agents_data = json.loads(raw)
     return [Agent(**a) for a in agents_data]

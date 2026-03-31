@@ -170,7 +170,7 @@ def _do_run(plan_path: Path, repo: Path) -> None:
 
 
 def _suggest_and_confirm_roster(plan_path: Path, repo: Path) -> list[Agent]:
-    """Read plan, ask LLM to suggest agents, show to user for confirmation."""
+    """Ask agent count + tiers, then LLM suggests names/roles/domains."""
     if plan_path.is_dir():
         plan_text = "\n\n---\n\n".join(
             f.read_text() for f in sorted(plan_path.glob("**/*.md"))
@@ -178,10 +178,23 @@ def _suggest_and_confirm_roster(plan_path: Path, repo: Path) -> list[Agent]:
     else:
         plan_text = plan_path.read_text()
 
-    console.print("[bold]Analyzing plan to suggest agents...[/bold]")
-    with console.status("[bold]Generating agent roster from plan...[/bold]"):
+    # Ask user for agent count and tiers
+    n = IntPrompt.ask("How many agents?", default=2)
+    agent_specs = []
+    for i in range(1, n + 1):
+        tier = Prompt.ask(
+            f"  Agent {i} tier",
+            default="medium",
+            choices=["low", "medium", "high"],
+            show_choices=True,
+        )
+        agent_specs.append({"tier": tier})
+
+    # Ask LLM to name them and pick roles/domains
+    console.print("\n[bold]Analyzing plan to name agents and assign roles...[/bold]")
+    with console.status("[bold]Generating agent roster...[/bold]"):
         try:
-            roster = suggest_roster(plan_text)
+            roster = suggest_roster(plan_text, agent_specs)
         except Exception as e:
             console.print(f"[red]Failed to suggest roster: {e}[/red]")
             console.print("[dim]Falling back to manual setup.[/dim]")
