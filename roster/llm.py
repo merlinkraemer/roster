@@ -19,7 +19,7 @@ def _api_key() -> str:
     return key
 
 
-def call_llm(system: str, user: str) -> str:
+def call_llm(system: str, user: str, timeout: int = 300) -> str:
     model = os.environ.get("ROSTER_MODEL", _DEFAULT_MODEL)
     base_url = os.environ.get("ROSTER_BASE_URL", _DEFAULT_BASE_URL).rstrip("/")
     url = f"{base_url}/chat/completions"
@@ -37,8 +37,9 @@ def call_llm(system: str, user: str) -> str:
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
             ],
+            "thinking": {"type": "enabled", "clear_thinking": False},
         },
-        timeout=120,
+        timeout=timeout,
     )
     response.raise_for_status()
     return response.json()["choices"][0]["message"]["content"]
