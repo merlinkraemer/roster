@@ -19,8 +19,9 @@ Return a JSON array of agents. Each agent must have:
 
 Rules:
 - Use exactly {high_count} high-tier agents, no more
-- High-tier agents get complex tasks (architecture, core implementation, hard problems)
-- Low-tier agents get simpler tasks (docs, config, tests, simple refactors)
+- High-tier agents handle ALL implementation work: backend, frontend, UI, components, API, database, state management, business logic, architecture
+- Low-tier agents handle ONLY: documentation, README, config files, project scaffolding, test boilerplate, CI/CD, .gitignore, examples
+- Low-tier agents must NEVER build features, write components, modify business logic, or touch production code
 - Agents should have non-overlapping domain responsibilities
 - Match role to the type of work
 
@@ -38,7 +39,9 @@ Return a JSON array of tasks. Each task must have:
 
 Rules:
 - Tasks must not share file ownership (no two tasks may list the same file)
-- A task's complexity must not exceed the agent's tier (low-tier agents get low-complexity tasks, high-tier can handle anything)
+- LOW-TIER AGENTS MAY ONLY BE ASSIGNED tasks that are: documentation, README, config files, project scaffolding, test boilerplate, CI/CD, examples, .gitignore, simple project organization
+- LOW-TIER AGENTS MUST NEVER be assigned: feature implementation, UI/components, backend/API code, database changes, business logic, state management, architecture decisions
+- HIGH-TIER AGENTS handle all implementation work (frontend, backend, UI, components, API, database, etc.)
 - Assign by domain fit first
 - Be specific about file paths; use directory patterns (e.g. "src/auth/") for broad ownership
 
