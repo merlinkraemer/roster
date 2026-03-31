@@ -1,0 +1,19 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "roster"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "typer>=0.12",
+    "requests>=2.32",
+    "rich>=13",
+]
+
+[project.scripts]
+roster = "roster.cli:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["roster"]
