@@ -131,20 +131,9 @@ def run(
 
 
 def _do_run(plan_path: Path, repo: Path) -> None:
-    """Execute the run flow: roster check, split, prompts, monitor."""
+    """Execute the run flow: roster, split, prompts, monitor."""
     # --- Step 1: Roster ---
-    roster = load_roster(repo)
-    if roster:
-        names = ", ".join(f"{a.name}" for a in roster)
-        reuse = questionary.select(
-            f"Found roster ({names}). Reuse?",
-            choices=["Yes", "No"],
-            default="Yes",
-        ).ask()
-        if reuse == "No":
-            roster = _suggest_and_confirm_roster(plan_path, repo)
-    else:
-        roster = _suggest_and_confirm_roster(plan_path, repo)
+    roster = _suggest_and_confirm_roster(plan_path, repo)
 
     if not roster:
         console.print("[red]No roster configured. Aborting.[/red]")
