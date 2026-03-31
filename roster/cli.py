@@ -18,7 +18,9 @@ from .config import (
 from .decompose import decompose_plan
 from .models import ARCHETYPE_DEFAULTS, Agent, SplitPlan, Task
 from .prompts import write_prompts
+from .llm import test_api_key
 from .review import generate_review
+from .run import RunError, Monitor, prepare_run
 
 app = typer.Typer(
     no_args_is_help=True,
@@ -35,20 +37,146 @@ def help(ctx: typer.Context) -> None:
 
 
 @app.command()
-def auth() -> None:
-    """Save your Z.AI API key (stored at ~/.config/roster/auth.json)."""
+def auth(
+    test: bool = typer.Option(False, "--test", "-t", help="Test saved API key"),
+) -> None:
+    """Manage Z.AI API key."""
+    if test:
+        return _auth_test()
+
     existing = load_api_key()
     if existing:
         masked = existing[:6] + "…" + existing[-4:]
         console.print(f"[dim]Current key: {masked}[/dim]")
 
-    key = Prompt.ask("Z.AI API key", password=True)
+    key = Prompt.ask("Z.AI API key")
     if not key.strip():
         console.print("[red]Aborted — no key entered.[/red]")
         raise typer.Exit(1)
 
-    save_api_key(key.strip())
-    console.print(f"[green]✓ Key saved to {_AUTH_FILE} (chmod 600)[/green]")
+    key = key.strip()
+    save_api_key(key)
+
+    with console.status("[bold]Testing API key...[/bold]"):
+        result = test_api_key(key)
+
+    if result["ok"]:
+        console.print(
+            f"[green]✓ Key saved to {_AUTH_FILE} (chmod 600) — API test passed[/green]"
+        )
+    else:
+        console.print(f"[green]✓ Key saved to {_AUTH_FILE} (chmod 600)[/green]")
+        console.print(f"[red]✗ API test failed: {result['error']}[/red]")
+        console.print("[dim]Run 'roster auth --test' to retry.[/dim]")
+
+
+def _auth_test() -> None:
+    """Test saved API key against the Z.AI coding endpoint."""
+    key = load_api_key()
+    if not key:
+        console.print("[red]No API key found. Run 'roster auth' to save one.[/red]")
+        raise typer.Exit(1)
+
+    masked = key[:6] + "…" + key[-4:]
+    console.print(f"[dim]Key: {masked}[/dim]\n")
+
+    with console.status("[bold]Testing API connection...[/bold]"):
+        result = test_api_key()
+
+    table = Table(show_header=False, padding=(0, 2))
+    table.add_column("Field", style="bold")
+    table.add_column("Value")
+    table.add_row("Endpoint", result["endpoint"])
+    table.add_row("Model", result["model"])
+    table.add_row("Prompt", result["prompt"])
+
+    if result["ok"]:
+        reply = result.get("response", "")
+        usage = result.get("usage", {})
+        table.add_row("Response", f"[green]{reply}[/green]")
+        if usage:
+            parts = []
+            if "prompt_tokens" in usage:
+                parts.append(f"in={usage['prompt_tokens']}")
+            if "completion_tokens" in usage:
+                parts.append(f"out={usage['completion_tokens']}")
+            if "total_tokens" in usage:
+                parts.append(f"total={usage['total_tokens']}")
+            if parts:
+                table.add_row("Tokens", "  ".join(parts))
+        console.print(table)
+        console.print("\n[green]✓ API connection successful[/green]")
+    else:
+        table.add_row("Error", f"[red]{result['error']}[/red]")
+        console.print(table)
+        console.print("\n[red]✗ API test failed[/red]")
+        console.print("[dim]Run 'roster auth' to update your key.[/dim]")
+        raise typer.Exit(1)
+
+
+@app.command()
+def run(
+    plan_path: Path = typer.Argument(..., help="Path to plan file or directory"),
+    repo: Path = typer.Option(Path("."), "--repo", "-r", help="Target repo path"),
+) -> None:
+    """Set up agents, split plan, generate prompts, and start monitoring."""
+    # --- Step 1: Roster ---
+    roster = load_roster(repo)
+    if roster:
+        names = ", ".join(f"[cyan]{a.name}[/]" for a in roster)
+        reuse = Prompt.ask(
+            f"Found roster ({names}). Reuse?", choices=["y", "n"], default="y"
+        )
+        if reuse == "n":
+            return _run_init_then_run(plan_path, repo)
+    else:
+        console.print("[yellow]No roster found.[/]")
+        return _run_init_then_run(plan_path, repo)
+
+    # --- Step 2: Split + Prompts ---
+    console.print()
+    try:
+        with console.status("[bold]Decomposing plan...[/bold]"):
+            result = prepare_run(repo, plan_path)
+    except RunError as e:
+        console.print(f"[red]{e}[/red]")
+        raise typer.Exit(1)
+
+    plan = result["plan"]
+    _print_task_table(plan.tasks)
+    console.print(f"\n[green]✓ Prompts written to {result['prompts_dir']}/[/green]")
+    console.print(f"[green]✓ COORDINATION.md at {result['coordination_path']}[/green]")
+
+    # --- Step 3: Monitor ---
+    console.print("\n[dim]Starting monitor. Agents are working in parallel.[/dim]")
+    console.print(
+        "[dim]Paste each prompt into its AI tool, then track progress here.[/dim]\n"
+    )
+    Monitor(repo, plan).start()
+
+
+def _run_init_then_run(plan_path: Path, repo: Path) -> None:
+    """Run init, then continue with the run flow."""
+    console.print("[bold]Set up your agent roster first.[/bold]\n")
+    init(repo=repo)
+    console.print()
+    run(plan_path=plan_path, repo=repo)
+
+
+def _print_task_table(tasks: list[Task]) -> None:
+    table = Table(title="Task Split")
+    table.add_column("ID", style="dim")
+    table.add_column("Description")
+    table.add_column("Agent", style="cyan")
+    table.add_column("Complexity")
+    table.add_column("Files", style="dim")
+    for t in tasks:
+        desc = t.description[:60] + "…" if len(t.description) > 60 else t.description
+        files_preview = "\n".join(t.files[:3])
+        if len(t.files) > 3:
+            files_preview += f"\n+{len(t.files) - 3} more"
+        table.add_row(t.id, desc, t.agent, t.complexity, files_preview)
+    console.print(table)
 
 
 @app.command()

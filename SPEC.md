@@ -27,17 +27,55 @@ When running multiple AI agents (Claude Code, Cursor, OpenCode, Antigravity, etc
 ```
 roster/
 ├── cli.py              # typer CLI entry point
+├── run.py              # orchestrator (prepare_run) + interactive monitor
 ├── decompose.py        # plan → atomic tasks via LLM
 ├── assign.py           # tasks × agents → assignments (confidence × domain fit)
 ├── prompts.py          # assignments → per-agent prompt files
 ├── review.py           # git log + output files → review doc
 ├── config.py           # agent roster persistence
-└── llm.py              # thin API client (anthropic SDK)
+└── llm.py              # thin API client (Z.AI coding endpoint)
 ```
 
 ## Commands
 
-### `roster init`
+### `roster run <plan-path>`
+
+One command to set up agents, split the plan, generate prompts, and start monitoring.
+
+1. **Roster check**: If `.roster/roster.json` exists, asks to reuse or reconfigure. If not, runs the init flow.
+2. **Split + Prompts**: Decomposes the plan into tasks, validates assignments, generates COORDINATION.md and per-agent prompt files.
+3. **Monitor**: Starts an interactive monitoring session (see below).
+
+```
+$ roster run plan.md
+Found roster (claude-code, cursor, opencode-glm5). Reuse? [y/n]: y
+⠋ Decomposing plan...
+┌──────┬─────────────────────────────┬──────────┬─────────────┬──────────┐
+│ ID   │ Description                 │ Agent    │ Complexity  │ Files    │
+│ ...  │ ...                         │ ...      │ ...         │ ...      │
+└──────┴─────────────────────────────┴──────────┴─────────────┴──────────┘
+✓ Prompts written to .roster/prompts/
+✓ COORDINATION.md at .roster/COORDINATION.md
+
+Starting monitor...
+```
+
+### Monitoring
+
+The monitor watches the repo for git commits and file changes, and provides an interactive REPL:
+
+| Command | Description |
+|---------|-------------|
+| `done <agent>` | Mark agent as done |
+| `blocked <agent>` | Mark agent as blocked |
+| `output <agent>` | Record agent output (multiline, blank line to end) |
+| `status` | Show current status table |
+| `review` | Generate review summary |
+| `q` / `quit` | Stop monitoring |
+
+Status table shows: Agent \| Status (working/done/blocked) \| Commits \| Files Changed
+
+New commits with `[agent-name]` prefix are automatically attributed. File changes are tracked per agent based on ownership in the split plan.
 
 Interactive setup of the agent roster. Saved to `.roster/roster.json`.
 
@@ -208,7 +246,7 @@ The CLI operates on a target repo (defaults to cwd). All roster state lives in `
 
 ## Non-Goals
 
-- Live monitoring / session blocking
 - Auto-launching agents
 - Real-time conflict resolution
 - Supporting non-git repos
+- Complex agent orchestration (this is a coordination tool, not an agent runtime)
