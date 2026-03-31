@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 Complexity = Literal["low", "medium", "high"]
-Tier = Literal["low", "medium", "high"]
+Tier = Literal["low", "high"]
 
 ROLE_DEFAULTS: dict[str, dict] = {
     "builder": {
@@ -24,11 +24,10 @@ ROLE_DEFAULTS: dict[str, dict] = {
 }
 
 # Tier determines max task complexity an agent can handle.
-# low  → low complexity tasks only (docs, simple fixes, config)
-# medium → low + medium tasks (standard implementation)
-# high → any task complexity (complex architecture, hard problems)
+# low  → low complexity tasks only (docs, config, git chores, simple refactors)
+# high → any task complexity (complex architecture, hard problems, cross-cutting concerns)
 
-TIER_ORDER = {"low": 0, "medium": 1, "high": 2}
+TIER_ORDER = {"low": 0, "high": 2}
 
 
 @dataclass

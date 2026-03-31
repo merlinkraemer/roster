@@ -197,7 +197,7 @@ def _do_run(plan_path: Path, repo: Path) -> None:
 
 
 def _suggest_and_confirm_roster(plan_path: Path, repo: Path) -> list[Agent]:
-    """Ask agent count + tiers, then LLM suggests names/roles/domains."""
+    """Ask high-tier count, then LLM decides total agents and assigns low-tier."""
     if plan_path.is_dir():
         plan_text = "\n\n---\n\n".join(
             f.read_text() for f in sorted(plan_path.glob("**/*.md"))
@@ -205,34 +205,23 @@ def _suggest_and_confirm_roster(plan_path: Path, repo: Path) -> list[Agent]:
     else:
         plan_text = plan_path.read_text()
 
-    # Ask user for agent count and tiers
-    console.print(
-        "[dim]Tiers: low (docs, config), medium (standard), high (complex)[/dim]"
-    )
-    n = questionary.text("How many agents?", default="2").ask()
-    if not n:
-        n = "2"
-    n = int(n)
+    # Ask only for high-tier budget
+    high_count = questionary.select(
+        "How many high-tier agents?",
+        choices=[
+            questionary.Choice("1", value=1),
+            questionary.Choice("2", value=2),
+            questionary.Choice("3", value=3),
+            questionary.Choice("4", value=4),
+        ],
+        default=2,
+    ).ask()
 
-    _TIER_OPTIONS = [
-        questionary.Choice("low  — docs, config, simple refactors", value="low"),
-        questionary.Choice("medium  — standard implementation", value="medium"),
-        questionary.Choice("high  — complex architecture, hard problems", value="high"),
-    ]
-    agent_specs = []
-    for i in range(1, n + 1):
-        tier = questionary.select(
-            f"Agent {i} tier",
-            choices=_TIER_OPTIONS,
-            default="medium",
-        ).ask()
-        agent_specs.append({"tier": tier})
-
-    # Ask LLM to name them and pick roles/domains
-    console.print("\n[bold]Analyzing plan to name agents and assign roles...[/bold]")
+    console.print(f"\n[dim]Low-tier agents: unlimited (LLM will decide how many)[/dim]")
+    console.print("[bold]Analyzing plan to build team...[/bold]")
     with console.status("[bold]Generating agent roster...[/bold]"):
         try:
-            roster = suggest_roster(plan_text, agent_specs)
+            roster = suggest_roster(plan_text, high_count)
         except Exception as e:
             console.print(f"[red]Failed to suggest roster: {e}[/red]")
             console.print("[dim]Falling back to manual setup.[/dim]")
@@ -297,13 +286,8 @@ def init(
     """Set up the agent roster interactively."""
     console.print("[bold]Roster Init[/bold] — configure your agent roster\n")
 
-    n_raw = questionary.text("How many agents?", default="2").ask()
-    n = int(n_raw) if n_raw else 2
-    agents: list[Agent] = []
-
     _TIER_OPTIONS = [
         questionary.Choice("low  — docs, config, simple refactors", value="low"),
-        questionary.Choice("medium  — standard implementation", value="medium"),
         questionary.Choice("high  — complex architecture, hard problems", value="high"),
     ]
 
@@ -314,6 +298,10 @@ def init(
         questionary.Choice("reviewer  — docs, simple fixes", value="reviewer"),
         questionary.Choice("skip", value=None),
     ]
+
+    n_raw = questionary.text("How many agents?", default="2").ask()
+    n = int(n_raw) if n_raw else 2
+    agents: list[Agent] = []
 
     for i in range(1, n + 1):
         console.print(f"\n[bold cyan]Agent {i}[/bold cyan]")
@@ -335,7 +323,7 @@ def init(
         tier = questionary.select(
             "  Tier",
             choices=_TIER_OPTIONS,
-            default="medium",
+            default="high",
         ).ask()
 
         override = (

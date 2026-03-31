@@ -3,24 +3,26 @@ import json
 from .llm import call_llm
 from .models import Agent, Task
 
-_SUGGEST_SYSTEM = """You are a technical project manager. Given a development plan and agent specs, propose the optimal team configuration.
+_SUGGEST_SYSTEM = """You are a technical project manager. Given a development plan and the user's available high-tier agents, propose the optimal team configuration.
 
-The user has specified how many agents they have and each agent's tier. You must:
-- Choose a short, simple name for each agent (one lowercase word: e.g. "backend", "frontend", "cli", "docs", "api")
-- Assign a role (builder/architect/explorer/reviewer) based on the plan's needs
-- Pick domains that don't overlap with other agents
+The user has specified how many high-tier agents they have available. Low-tier agents are unlimited. You must:
+- Decide the total number of agents needed based on the plan's complexity and scope
+- Assign high-tier agents to the most complex/critical parts of the plan
+- Fill remaining work with low-tier agents (docs, config, tests, simple tasks)
+- Choose short, simple names (one lowercase word: e.g. "backend", "frontend", "cli", "docs")
 
 Return a JSON array of agents. Each agent must have:
 - name: string (one lowercase word, e.g. "backend")
-- tier: string (use the tier provided in the agent spec)
+- tier: "low" or "high" (exactly {high_count} agents must be "high", the rest "low")
 - role: one of "builder", "architect", "explorer", "reviewer"
 - domains: array of domain strings (e.g. ["backend", "api", "auth"])
 
 Rules:
-- Use exactly the number of agents specified
-- Use exactly the tiers specified (in order)
+- Use exactly {high_count} high-tier agents, no more
+- High-tier agents get complex tasks (architecture, core implementation, hard problems)
+- Low-tier agents get simpler tasks (docs, config, tests, simple refactors)
 - Agents should have non-overlapping domain responsibilities
-- Match role to the type of work (builder for implementation, architect for design, etc.)
+- Match role to the type of work
 
 Return ONLY the JSON array, no markdown fences, no explanation."""
 
@@ -43,14 +45,17 @@ Rules:
 Return ONLY the JSON array, no markdown fences, no explanation."""
 
 
-def suggest_roster(plan_text: str, agent_specs: list[dict]) -> list[Agent]:
-    """Ask the LLM to propose agents based on the plan content and user-provided specs.
+def suggest_roster(plan_text: str, high_count: int) -> list[Agent]:
+    """Ask the LLM to propose agents based on the plan content and high-tier budget.
 
-    agent_specs: list of {"tier": "low"|"medium"|"high"} dicts, one per agent.
+    high_count: number of high-tier agents available (low-tier are unlimited).
     """
-    specs_json = json.dumps(agent_specs, indent=2)
-    user_msg = f"## Agent Specs\n\n{specs_json}\n\n## Development Plan\n\n{plan_text}"
-    raw = call_llm(_SUGGEST_SYSTEM, user_msg).strip()
+    user_msg = (
+        f"## High-Tier Agents Available: {high_count}\n\n"
+        f"## Development Plan\n\n{plan_text}"
+    )
+    system = _SUGGEST_SYSTEM.format(high_count=high_count)
+    raw = call_llm(system, user_msg).strip()
     raw = _strip_fences(raw)
     agents_data = json.loads(raw)
     return [Agent(**a) for a in agents_data]
