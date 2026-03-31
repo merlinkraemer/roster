@@ -78,10 +78,11 @@ def _save_split_plan(plan: SplitPlan, roster_dir: Path) -> None:
 
 class Monitor:
     """
-    Passive monitor for parallel agent runs.
+    Monitor for parallel agent runs.
 
-    Auto-polls git every 30s, displays per-agent status,
-    and accepts commands: update <agent> <note> | done | q
+    Shows a factual git-based table (commits, files changed, last commit).
+    Accepts freeform notes from the user. 'done' compiles everything into
+    a cycle summary file.
     """
 
     REFRESH_INTERVAL = 30  # seconds between auto-polls
@@ -102,7 +103,9 @@ class Monitor:
         self.agent_commits: dict[str, list[dict]] = {a: [] for a in agents}
         self.agent_files: dict[str, set[str]] = {a: set() for a in agents}
         self.agent_last_commit: dict[str, float | None] = {a: None for a in agents}
-        self.agent_notes: dict[str, str] = {a: "" for a in agents}
+
+        # Freeform notes log: list of (timestamp, text)
+        self.notes: list[tuple[float, str]] = []
 
         # Track which commit hashes we've already processed
         self.seen_commits: set[str] = set()
@@ -114,11 +117,11 @@ class Monitor:
         self._lock = threading.Lock()
 
     def start(self) -> None:
-        """Main loop: auto-poll in background, accept commands from stdin."""
+        """Main loop: auto-poll in background, accept notes from stdin."""
         self.console.print(
-            "\n[dim]auto-refreshing every 30s. commands: update <agent> <note> | done | q[/dim]\n"
+            "\n[dim]type a note and press Enter to save it. 'done' to finish and write cycle summary, 'q' to quit.[/dim]\n"
         )
-        self._render_status()
+        self._render()
 
         poll_thread = threading.Thread(target=self._auto_poll, daemon=True)
         poll_thread.start()
@@ -131,23 +134,17 @@ class Monitor:
                 break
 
             if not line:
-                with self._lock:
-                    self._render_status()
+                self._render()
+            elif line.lower() in ("q", "quit", "exit"):
+                self._running = False
+                self.console.print("[dim]done watching.[/dim]")
+            elif line.lower() == "done":
+                path = self._write_cycle_summary()
+                self.console.print(f"\n[green]cycle summary → {path}[/green]")
+                self._running = False
             else:
-                cmd = line.lower()
-                if cmd in ("q", "quit", "exit"):
-                    self._running = False
-                    self.console.print("[dim]done watching.[/dim]")
-                elif cmd == "done":
-                    path = self._write_cycle_summary()
-                    self.console.print(f"\n[green]cycle summary → {path}[/green]")
-                    self._running = False
-                elif line.lower().startswith("update "):
-                    self._handle_update_cmd(line[7:])
-                else:
-                    self.console.print(
-                        "[dim]commands: update <agent> <note> | done | q[/dim]"
-                    )
+                self.notes.append((time.time(), line))
+                self.console.print("[dim]saved.[/dim]")
 
     def _auto_poll(self) -> None:
         """Background thread: poll git every REFRESH_INTERVAL seconds."""
@@ -157,30 +154,36 @@ class Monitor:
                 break
             with self._lock:
                 new_commits = self._poll_git()
-                changed_files = self._poll_files()
+                self._poll_files()
             if new_commits:
                 self._display_new_commits(new_commits)
-            if new_commits or changed_files:
-                self._render_status()
+                self._render()
 
-    def _handle_update_cmd(self, rest: str) -> None:
-        """Parse and store: update <agent> <note>"""
-        parts = rest.split(" ", 1)
-        if len(parts) < 2:
-            self.console.print("[dim]usage: update <agent> <note>[/dim]")
-            return
-        agent_name, note = parts[0], parts[1]
-        # case-insensitive match
-        if agent_name not in self.agent_notes:
-            matches = [a for a in self.agent_notes if a.lower() == agent_name.lower()]
-            if matches:
-                agent_name = matches[0]
-            else:
-                self.console.print(f"[red]unknown agent: {agent_name}[/red]")
-                return
-        self.agent_notes[agent_name] = note
-        self.console.print(f"[dim]note saved for {agent_name}[/dim]")
-        self._render_status()
+    def _render(self) -> None:
+        """Print the status table followed by any saved notes."""
+        table = Table(show_header=True, header_style="bold", show_lines=True)
+        table.add_column("Agent", style="cyan")
+        table.add_column("Commits", justify="right")
+        table.add_column("Files Changed", justify="right")
+        table.add_column("Last Commit")
+
+        for assignment in self.plan.assignments:
+            agent = assignment.agent
+            commits = len(self.agent_commits.get(agent, []))
+            files = len(self.agent_files.get(agent, set()))
+            last_commit = self._format_last_commit(agent)
+            table.add_row(agent, str(commits), str(files), last_commit)
+
+        self.console.print(
+            Panel(table, title="[bold]Agent Progress[/]", border_style="blue")
+        )
+
+        if self.notes:
+            self.console.print("[bold]Notes[/bold]")
+            for ts, text in self.notes:
+                dt = datetime.fromtimestamp(ts).strftime("%H:%M")
+                self.console.print(f"  [dim]{dt}[/dim]  {text}")
+            self.console.print()
 
     def _write_cycle_summary(self) -> Path:
         """Write a cycle summary markdown file to .roster/cycle-N.md."""
@@ -202,23 +205,17 @@ class Monitor:
             agent = assignment.agent
             commits = self.agent_commits.get(agent, [])
             files = self.agent_files.get(agent, set())
-            status = self._get_agent_status(agent)
-            note = self.agent_notes.get(agent, "")
-
             lines += [
                 f"### {agent}",
                 "",
                 f"**Work:** {'; '.join(assignment.work)}",
-                f"**Files:** {', '.join(assignment.files)}",
-                f"**Status:** {status}",
+                f"**Owned files:** {', '.join(assignment.files)}",
                 f"**Commits:** {len(commits)}",
                 f"**Files changed:** {len(files)}",
+                "",
             ]
-            if note:
-                lines.append(f"**Summary:** {note}")
-            lines.append("")
 
-        all_commits = []
+        all_commits: list[dict] = []
         for agent_commits in self.agent_commits.values():
             all_commits.extend(agent_commits)
         all_commits.sort(key=lambda c: c["timestamp"])
@@ -227,6 +224,13 @@ class Monitor:
             lines += ["## Commit log", ""]
             for c in all_commits:
                 lines.append(f"- `{c['hash']}` [{c['agent']}] {c['message']}")
+            lines.append("")
+
+        if self.notes:
+            lines += ["## Notes", ""]
+            for ts, text in self.notes:
+                dt = datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M")
+                lines.append(f"- **{dt}** {text}")
             lines.append("")
 
         path = roster_dir / f"cycle-{cycle_num}.md"
@@ -311,28 +315,6 @@ class Monitor:
 
         return changed
 
-    def _get_agent_status(self, agent: str) -> str:
-        commits = self.agent_commits.get(agent, [])
-        last_time = self.agent_last_commit.get(agent)
-
-        if not commits:
-            return "idle"
-
-        now = time.time()
-        elapsed = now - last_time if last_time is not None else float("inf")
-
-        # Done: all owned files touched and idle for 10+ minutes
-        owned = {f for f, owner in self._file_owners.items() if owner == agent}
-        touched = self.agent_files.get(agent, set())
-        all_touched = bool(owned) and owned.issubset(touched)
-
-        if all_touched and elapsed > 600:
-            return "done"
-        elif elapsed < 300:
-            return "active"
-        else:
-            return "idle"
-
     def _format_last_commit(self, agent: str) -> str:
         last_time = self.agent_last_commit.get(agent)
         if last_time is None:
@@ -350,37 +332,3 @@ class Monitor:
             self.console.print(
                 f"[green][{c['agent']}][/green] {c['hash']} {c['message']}"
             )
-
-    def _render_status(self) -> None:
-        table = Table(show_header=True, header_style="bold")
-        table.add_column("Agent", style="cyan")
-        table.add_column("Status")
-        table.add_column("Commits", justify="right")
-        table.add_column("Files Changed", justify="right")
-        table.add_column("Last Commit")
-
-        status_styles = {
-            "active": "[green]doing stuff...[/]",
-            "idle": "[yellow]idle[/]",
-            "done": "[bold green]done ✓[/]",
-        }
-
-        for assignment in self.plan.assignments:
-            agent = assignment.agent
-            status = self._get_agent_status(agent)
-            status_str = status_styles.get(status, status)
-            commits = len(self.agent_commits.get(agent, []))
-            files = len(self.agent_files.get(agent, set()))
-            last_commit = self._format_last_commit(agent)
-
-            table.add_row(agent, status_str, str(commits), str(files), last_commit)
-
-        self.console.print(
-            Panel(table, title="[bold]Agent Status[/]", border_style="blue")
-        )
-
-        # Show any agent notes below the table
-        notes = {a: n for a, n in self.agent_notes.items() if n}
-        if notes:
-            for agent, note in notes.items():
-                self.console.print(f"  [cyan]{agent}[/cyan] [dim]→[/dim] {note}")
