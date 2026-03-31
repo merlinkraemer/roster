@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from .models import ARCHETYPE_DEFAULTS, Agent, SplitPlan, Task
+from .models import ROLE_DEFAULTS, Agent, SplitPlan, Task
 
 
 def generate_coordination_md(plan: SplitPlan, roster: list[Agent]) -> str:
@@ -49,10 +49,10 @@ def generate_coordination_md(plan: SplitPlan, roster: list[Agent]) -> str:
         "",
     ]
     for a in roster:
-        archetype_str = f" ({a.archetype})" if a.archetype else ""
+        role_str = f" ({a.role})" if a.role else ""
         lines.append(
-            f"- **{a.name}**{archetype_str} — confidence: {a.confidence}, "
-            f"domains: {', '.join(a.domains)}, max complexity: {a.max_complexity}"
+            f"- **{a.name}**{role_str} — tier: {a.tier}, "
+            f"domains: {', '.join(a.domains)}"
         )
 
     return "\n".join(lines) + "\n"
@@ -66,9 +66,9 @@ def generate_agent_prompt(
 ) -> str:
     lines: list[str] = []
 
-    if agent.archetype and agent.archetype in ARCHETYPE_DEFAULTS:
-        persona = ARCHETYPE_DEFAULTS[agent.archetype]["persona"]
-        lines += ["# Persona", "", persona, ""]
+    if agent.role and agent.role in ROLE_DEFAULTS:
+        persona = ROLE_DEFAULTS[agent.role]["persona"]
+        lines += ["# Role", "", persona, ""]
 
     lines += [
         "# Your Assignment",

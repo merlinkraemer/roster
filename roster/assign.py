@@ -1,15 +1,12 @@
 from .models import Agent, Task
 
-_COMPLEXITY_ORDER = {"low": 0, "medium": 1, "high": 2, "any": 3}
+_TIER_ORDER = {"low": 0, "medium": 1, "high": 2}
 
 
 def hard_gate_filter(agents: list[Agent], complexity: str) -> list[Agent]:
-    """Return agents whose max_complexity can handle the given task complexity."""
-    task_level = _COMPLEXITY_ORDER[complexity]
-    return [
-        a for a in agents
-        if a.max_complexity == "any" or _COMPLEXITY_ORDER[a.max_complexity] >= task_level
-    ]
+    """Return agents whose tier can handle the given task complexity."""
+    task_level = _TIER_ORDER[complexity]
+    return [a for a in agents if _TIER_ORDER[a.tier] >= task_level]
 
 
 def validate_assignments(tasks: list[Task], roster: list[Agent]) -> list[str]:
@@ -27,7 +24,7 @@ def validate_assignments(tasks: list[Task], roster: list[Agent]) -> list[str]:
         eligible = hard_gate_filter(roster, task.complexity)
         if agent not in eligible:
             violations.append(
-                f"{task.id}: '{task.agent}' (max={agent.max_complexity}) "
+                f"{task.id}: '{task.agent}' (tier={agent.tier}) "
                 f"cannot handle complexity '{task.complexity}'"
             )
 

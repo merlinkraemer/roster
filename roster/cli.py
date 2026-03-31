@@ -15,8 +15,8 @@ from .config import (
     save_api_key,
     save_roster,
 )
-from .decompose import decompose_plan
-from .models import ARCHETYPE_DEFAULTS, Agent, SplitPlan, Task
+from .decompose import decompose_plan, suggest_roster
+from .models import ROLE_DEFAULTS, Agent, SplitPlan, Task
 from .prompts import write_prompts
 from .llm import test_api_key
 from .review import generate_review
@@ -116,10 +116,21 @@ def _auth_test() -> None:
 
 @app.command()
 def run(
-    plan_path: Path = typer.Argument(..., help="Path to plan file or directory"),
+    plan_path: Path = typer.Argument(
+        None,
+        help="Path to plan file or directory",
+    ),
     repo: Path = typer.Option(Path("."), "--repo", "-r", help="Target repo path"),
 ) -> None:
     """Set up agents, split plan, generate prompts, and start monitoring."""
+    if not plan_path:
+        plan_path = Path(Prompt.ask("Path to plan file or directory"))
+
+    _do_run(plan_path, repo)
+
+
+def _do_run(plan_path: Path, repo: Path) -> None:
+    """Execute the run flow: roster check, split, prompts, monitor."""
     # --- Step 1: Roster ---
     roster = load_roster(repo)
     if roster:
@@ -128,10 +139,13 @@ def run(
             f"Found roster ({names}). Reuse?", choices=["y", "n"], default="y"
         )
         if reuse == "n":
-            return _run_init_then_run(plan_path, repo)
+            roster = _suggest_and_confirm_roster(plan_path, repo)
     else:
-        console.print("[yellow]No roster found.[/]")
-        return _run_init_then_run(plan_path, repo)
+        roster = _suggest_and_confirm_roster(plan_path, repo)
+
+    if not roster:
+        console.print("[red]No roster configured. Aborting.[/red]")
+        raise typer.Exit(1)
 
     # --- Step 2: Split + Prompts ---
     console.print()
@@ -155,12 +169,54 @@ def run(
     Monitor(repo, plan).start()
 
 
-def _run_init_then_run(plan_path: Path, repo: Path) -> None:
-    """Run init, then continue with the run flow."""
-    console.print("[bold]Set up your agent roster first.[/bold]\n")
-    init(repo=repo)
-    console.print()
-    run(plan_path=plan_path, repo=repo)
+def _suggest_and_confirm_roster(plan_path: Path, repo: Path) -> list[Agent]:
+    """Read plan, ask LLM to suggest agents, show to user for confirmation."""
+    if plan_path.is_dir():
+        plan_text = "\n\n---\n\n".join(
+            f.read_text() for f in sorted(plan_path.glob("**/*.md"))
+        )
+    else:
+        plan_text = plan_path.read_text()
+
+    console.print("[bold]Analyzing plan to suggest agents...[/bold]")
+    with console.status("[bold]Generating agent roster from plan...[/bold]"):
+        try:
+            roster = suggest_roster(plan_text)
+        except Exception as e:
+            console.print(f"[red]Failed to suggest roster: {e}[/red]")
+            console.print("[dim]Falling back to manual setup.[/dim]")
+            init(repo=repo)
+            return load_roster(repo)
+
+    table = Table(title="Suggested Agent Roster")
+    table.add_column("Name", style="cyan")
+    table.add_column("Role")
+    table.add_column("Tier")
+    table.add_column("Domains")
+    for a in roster:
+        table.add_row(
+            a.name,
+            a.role or "—",
+            a.tier,
+            ", ".join(a.domains),
+        )
+    console.print(table)
+
+    confirm = Prompt.ask("Accept this roster?", choices=["y", "n", "e"], default="y")
+    if confirm == "n":
+        console.print(
+            "[dim]Run 'roster init' to set up manually, then 'roster run' again.[/dim]"
+        )
+        return []
+    if confirm == "e":
+        init(repo=repo)
+        return load_roster(repo)
+
+    save_roster(roster, repo)
+    console.print(
+        f"[green]✓ Roster saved to {get_roster_dir(repo) / 'roster.json'}[/green]"
+    )
+    return roster
 
 
 def _print_task_table(tasks: list[Task]) -> None:
@@ -188,25 +244,30 @@ def init(
 
     n = IntPrompt.ask("How many agents?", default=2)
     agents: list[Agent] = []
-    archetype_choices = "craftsman/architect/explorer/reviewer"
+    role_choices = "builder/architect/explorer/reviewer"
 
     for i in range(1, n + 1):
         console.print(f"\n[bold cyan]Agent {i}[/bold cyan]")
         name = Prompt.ask("  Name")
 
-        archetype_raw = Prompt.ask(
-            f"  Archetype (optional — {archetype_choices}, or skip)", default=""
+        role_raw = Prompt.ask(
+            f"  Role (optional — {role_choices}, or skip)", default=""
         ).strip()
-        archetype = archetype_raw or None
+        role = role_raw or None
 
         default_domains: list[str] = []
-        if archetype and archetype in ARCHETYPE_DEFAULTS:
-            default_domains = ARCHETYPE_DEFAULTS[archetype]["domains"]
+        if role and role in ROLE_DEFAULTS:
+            default_domains = ROLE_DEFAULTS[role]["domains"]
             console.print(
                 f"  [dim]→ domains pre-filled: {', '.join(default_domains)}[/dim]"
             )
 
-        confidence = IntPrompt.ask("  Confidence (0-100)", default=80)
+        tier = Prompt.ask(
+            "  Tier",
+            default="medium",
+            choices=["low", "medium", "high"],
+            show_choices=True,
+        )
 
         override = Prompt.ask(
             "  Override domains? (comma-separated, leave blank to keep pre-filled)",
@@ -220,20 +281,12 @@ def init(
             raw = Prompt.ask("  Domains (comma-separated)")
             domains = [d.strip() for d in raw.split(",")]
 
-        max_complexity = Prompt.ask(
-            "  Max complexity",
-            default="any",
-            choices=["low", "medium", "high", "any"],
-            show_choices=True,
-        )
-
         agents.append(
             Agent(
                 name=name,
-                archetype=archetype,
-                confidence=confidence,
+                tier=tier,  # type: ignore[arg-type]
+                role=role,
                 domains=domains,
-                max_complexity=max_complexity,  # type: ignore[arg-type]
             )
         )
 
@@ -241,17 +294,15 @@ def init(
 
     table = Table(title="Agent Roster")
     table.add_column("Name")
-    table.add_column("Archetype")
-    table.add_column("Confidence")
+    table.add_column("Role")
+    table.add_column("Tier")
     table.add_column("Domains")
-    table.add_column("Max Complexity")
     for a in agents:
         table.add_row(
             a.name,
-            a.archetype or "—",
-            str(a.confidence),
+            a.role or "—",
+            a.tier,
             ", ".join(a.domains),
-            a.max_complexity,
         )
     console.print(table)
     console.print(
@@ -289,23 +340,11 @@ def split(
 
     plan = SplitPlan(
         source=str(plan_path),
-        delegation_strategy="expertise_based",
+        delegation_strategy="tier-based",
         tasks=tasks,
     )
 
-    table = Table(title="Task Split")
-    table.add_column("ID", style="dim")
-    table.add_column("Description")
-    table.add_column("Agent", style="cyan")
-    table.add_column("Complexity")
-    table.add_column("Files", style="dim")
-    for t in tasks:
-        desc = t.description[:60] + "…" if len(t.description) > 60 else t.description
-        files_preview = "\n".join(t.files[:3])
-        if len(t.files) > 3:
-            files_preview += f"\n+{len(t.files) - 3} more"
-        table.add_row(t.id, desc, t.agent, t.complexity, files_preview)
-    console.print(table)
+    _print_task_table(tasks)
 
     ros_dir = get_roster_dir(repo)
     ros_dir.mkdir(parents=True, exist_ok=True)

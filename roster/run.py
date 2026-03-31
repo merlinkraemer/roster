@@ -14,8 +14,8 @@ from rich.prompt import Prompt
 from rich.table import Table
 
 from .assign import validate_assignments
-from .config import get_roster_dir, load_roster
-from .decompose import decompose_plan
+from .config import get_roster_dir, load_roster, save_roster
+from .decompose import decompose_plan, suggest_roster
 from .models import Agent, SplitPlan
 from .prompts import write_prompts
 from .review import generate_review

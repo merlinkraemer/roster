@@ -42,10 +42,9 @@ def save_roster(agents: list[Agent], repo_path: Path | None = None) -> None:
         "agents": [
             {
                 "name": a.name,
-                "archetype": a.archetype,
-                "confidence": a.confidence,
+                "tier": a.tier,
+                "role": a.role,
                 "domains": a.domains,
-                "max_complexity": a.max_complexity,
             }
             for a in agents
         ]
